@@ -234,6 +234,11 @@ def root():
         }
     }
 
+@app.get("/health")
+def health_check():
+    """Health check endpoint for Railway"""
+    return {"status": "healthy", "service": "adintel-backend"}
+
 @app.post("/api/scrape", response_model=ScrapeResponse)
 async def scrape_ads(request: ScrapeRequest, background_tasks: BackgroundTasks):
     """
