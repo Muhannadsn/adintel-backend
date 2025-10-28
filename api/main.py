@@ -2,12 +2,13 @@
 """
 AdIntel API - FastAPI backend for ad intelligence platform
 """
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, HttpUrl
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+import shutil
 from pathlib import Path
 import uuid
 import json
@@ -238,6 +239,41 @@ def root():
 def health_check():
     """Health check endpoint for Railway"""
     return {"status": "healthy", "service": "adintel-backend"}
+
+@app.post("/api/upload-database")
+async def upload_database(file: UploadFile = File(...)):
+    """
+    Upload a new database file to replace the existing one.
+    Use this to sync your local database with the deployed version.
+
+    Usage:
+    curl -X POST https://your-backend-url/api/upload-database \
+      -F "file=@/path/to/your/ads.db"
+    """
+    if not file.filename.endswith('.db'):
+        raise HTTPException(status_code=400, detail="Only .db files are allowed")
+
+    try:
+        # Save the uploaded file
+        db_path = Path("data/ads.db")
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with db_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # Reinitialize database connection
+        global db
+        if DB_AVAILABLE:
+            db = AdDatabase()
+
+        return {
+            "status": "success",
+            "message": "Database updated successfully",
+            "filename": file.filename,
+            "size_bytes": db_path.stat().st_size
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to upload database: {str(e)}")
 
 @app.post("/api/scrape", response_model=ScrapeResponse)
 async def scrape_ads(request: ScrapeRequest, background_tasks: BackgroundTasks):
