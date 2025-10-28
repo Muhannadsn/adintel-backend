@@ -4,9 +4,6 @@ uvicorn[standard]==0.24.0
 pydantic==2.5.0
 python-multipart==0.0.6
 
-# Database
-sqlite3  # Built-in with Python
-
 # HTTP & API
 requests==2.31.0
 httpx==0.25.1
@@ -23,6 +20,3 @@ anthropic==0.7.0
 # Scraping (if using)
 selenium==4.15.2
 beautifulsoup4==4.12.2
-
-# CORS
-python-multipart==0.0.6
