@@ -1,0 +1,1 @@
+# Stores all non-sensitive configuration like GATC URLs, screenshot wait times, Ollama endpoint (localhost:11434), and batch processing sizes

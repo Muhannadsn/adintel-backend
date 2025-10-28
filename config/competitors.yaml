@@ -1,0 +1,41 @@
+# Competitor Tracking Configuration
+# List competitors to monitor automatically
+
+competitors:
+  - name: "Talabat"
+    region: "QA"
+    enabled: true
+
+  - name: "Careem"
+    region: "QA"
+    enabled: true
+
+  - name: "Deliveroo"
+    region: "QA"
+    enabled: false
+
+  - name: "Zomato"
+    region: "QA"
+    enabled: false
+
+  - name: "Uber Eats"
+    region: "QA"
+    enabled: false
+
+# Scraping settings
+scraping:
+  max_ads_per_competitor: 100
+  scroll_attempts: 5
+  wait_time_seconds: 2
+
+# Scheduling (for automated runs)
+schedule:
+  enabled: false
+  frequency: "daily"  # daily, weekly, monthly
+  time: "02:00"  # 2 AM
+
+# Output settings
+output:
+  directory: "data/input/scraped"
+  filename_format: "{advertiser}_{date}.csv"
+  keep_history_days: 30

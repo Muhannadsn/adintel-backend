@@ -1,0 +1,1 @@
+# Configures Python logging with proper formatters, file rotation, and log levels (DEBUG for development, INFO for production)

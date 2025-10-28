@@ -1,0 +1,95 @@
+# Quick Fix: Add Error Handling to process_manual_csvs.py
+
+## Apply This Fix (Optional but Recommended)
+
+Add error handling so one bad image doesn't crash the entire batch:
+
+### Change #1: Add error tracking variables (Line 76)
+```python
+# BEFORE:
+total_processed = 0
+total_with_images = 0
+
+# AFTER:
+total_processed = 0
+total_with_images = 0
+total_failed = 0
+```
+
+### Change #2: Wrap enrichment in try-except (Line 118-196)
+```python
+# BEFORE:
+for idx, ad in enumerate(ads):
+    print(f"\n[{idx+1}/{len(ads)}] Processing {ad.get('creative_id', 'unknown')}...")
+
+    # ... setup code ...
+
+    # Run full orchestrator pipeline (with vision!)
+    enriched_context = orchestrator.enrich(context)
+
+    # ... save results ...
+
+    enriched_ads.append(enriched_ad)
+
+# AFTER:
+for idx, ad in enumerate(ads):
+    print(f"\n[{idx+1}/{len(ads)}] Processing {ad.get('creative_id', 'unknown')}...")
+
+    try:
+        # ... setup code ...
+
+        # Run full orchestrator pipeline (with vision!)
+        enriched_context = orchestrator.enrich(context)
+
+        # ... save results ...
+
+        enriched_ads.append(enriched_ad)
+
+    except Exception as e:
+        print(f"   ❌ FAILED: {e}")
+        total_failed += 1
+        # Log to error file
+        with open('enrichment_errors.log', 'a') as f:
+            f.write(f"{ad.get('creative_id', 'unknown')}: {str(e)}\n")
+        continue  # Skip this ad, move to next
+```
+
+### Change #3: Update final stats (Line 210-211)
+```python
+# BEFORE:
+print(f"Total ads processed: {total_processed}")
+print(f"Total ads with images: {total_with_images}")
+
+# AFTER:
+print(f"Total ads processed: {total_processed}")
+print(f"Total ads failed: {total_failed}")
+print(f"Total ads with images: {total_with_images}")
+print(f"Success rate: {(total_processed / (total_processed + total_failed) * 100):.1f}%")
+```
+
+## Why This Fix?
+
+Without error handling, if PaddleOCR fails on ONE image (corrupted file, missing model, etc.), the ENTIRE batch crashes. With this fix:
+- ✅ Failed ads are logged to `enrichment_errors.log`
+- ✅ Script continues processing remaining ads
+- ✅ You get a final success rate report
+
+## Quick Application (Using sed)
+
+```bash
+# Backup original
+cp process_manual_csvs.py process_manual_csvs.py.backup
+
+# Apply fix manually or run with current version
+# (Current version will work but crash on first error)
+```
+
+## Alternative: Run Without Fix
+
+The current version will work fine IF:
+- All images are valid JPGs
+- All screenshots exist
+- PaddleOCR models are loaded
+- No network issues during web validation
+
+If you encounter errors, just fix the specific issue and re-run.

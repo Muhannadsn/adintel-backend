@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "GATC Scraper",
+  "version": "1.0",
+  "description": "Scrape Google Ad Transparency Center data",
+  "permissions": ["activeTab", "scripting", "downloads"],
+  "host_permissions": ["https://adstransparency.google.com/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon.png"
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}

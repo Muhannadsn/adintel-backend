@@ -1,0 +1,100 @@
+Agent Lineup
+
+Context Builder
+Inputs: raw image, advertiser metadata (id, name, region, scrape timestamps).
+Task: initialize AdContext (unique_id, advertiser_id, region_hint, raw_image, raw_text="", evidence=[], confidence=1.0).
+Outputs: populated AdContext ready for downstream agents.
+
+Agent 1 – Text Extractor (LLaVA + OCR fallback)
+Inputs: AdContext with raw image.
+Task: run vision OCR, strip platform boilerplate, capture language markers, store verbatim transcript.
+Outputs: context.raw_text, context.ocr_confidence, append VisionEvidence.
+
+Agent 2 – Brand Resolver
+Inputs: context.raw_text, advertiser_id, merchant KB, alias index.
+Task: match text tokens/aliases to known merchants; score matches; detect conflicts with advertiser metadata.
+Outputs: context.brand (canonical name), context.brand_confidence, context.brand_source, context.evidence.
+
+Agent 3 – Subscription & Platform Detector
+Inputs: context.raw_text, brand result, advertiser_id, platform rules/KB.
+Task: decide if creative is a platform subscription, marketplace branding, or partner restaurant; normalize subscription name; capture conflicting signals.
+Outputs: context.subscription (name/False), context.platform_branding, context.flags (e.g., platform_conflict).
+
+Agent 4 – Product Type Classifier
+Inputs: cleaned text, brand info, subscription flag, advertiser vertical metadata.
+Task: label creative as Restaurant / Physical Product / Service / Subscription / Marketplace Promo; assign confidence.
+Outputs: context.product_type, context.product_type_confidence.
+
+Agent 5 – External Verifier (Perplexica + Cache/RAG)
+Trigger: when brand_confidence or product_type_confidence below threshold or conflicts flagged.
+Inputs: query payload (brand guess, key phrases), cache, vector index.
+Task: reuse cached memory if close match; otherwise query Perplexica/SearXNG, summarize with Ollama, decide “restaurant/product/service”, detect region/offer hints, store results.
+Outputs: context.verifier_summary, adjusted brand/product_type, cache upsert.
+
+Agent 6 – Food Category Classifier
+Preconditions: context.product_type == Restaurant.
+Inputs: context.raw_text, brand metadata, menu keywords, KB categories.
+Task: map to allowed categories (Pizza, Burgers, etc.), using rules first then LLM fallback.
+Outputs: context.food_category, context.food_category_confidence.
+
+Agent 7 – Offer Extractor
+Inputs: cleaned text, language markers.
+Task: extract promo type (percentage, BOGO, free delivery, limited time), offer details, value figures; handle multilingual numbers and currency.
+Outputs: context.offer_type, context.offer_details, context.offer_confidence.
+
+Agent 8 – Audience Detector
+Inputs: cleaned text, imagery descriptors (if available), brand vertical.
+Task: infer audience segment (Young Professionals, Families, etc.), note indicators (e.g., “kids”, “after gym”).
+Outputs: context.audience_segment, context.audience_confidence, evidence tags.
+
+Agent 9 – Theme Analyzer
+Inputs: cleaned text, offer detection, timing/urgency phrases.
+Task: score messaging themes (price/speed/quality/convenience) 0–1, choose primary theme.
+Outputs: context.messaging_themes, context.primary_theme.
+
+Agent 10 – Region Validator
+Inputs: context.raw_text, advertiser region metadata, phone/currency lists.
+Task: confirm or override region designation (QA, KW, etc.), flag mismatches.
+Outputs: context.region, context.region_confidence, context.flags.
+
+Agent 11 – Consistency Auditor
+Inputs: full AdContext, rule set.
+Task: ensure brand vs. product_type vs. category coherence (e.g., subscription + pizza category → conflict), verify confidence thresholds, assemble final enrichment payload.
+Outputs: EnrichedAd dict (product_category, product_name, messaging themes, audience, offer, confidence, evidence trail), context.issues for manual review.
+
+Shared Infrastructure
+
+AdContext: central dataclass passed between agents, accumulating fields listed above.
+Merchant KB + alias list + subscription metadata: used by Agents 2–4, 6.
+RAG index + cache store: used by Agent 5 for memory.
+Evidence log (list of {"agent": name, "observation": str, "confidence": float}) maintained so the auditor can trace decisions.
+
+
+
+Tooling Stack
+
+LLaVA (Ollama vision model) – primary OCR/text extraction from creatives.
+Deterministic OCR fallback (e.g., Tesseract/PaddleOCR) – sanity-check LLaVA transcripts.
+Ollama text models (e.g., llama3/qwen) – downstream classification, summarization, and verification prompts.
+Perplexica (self-hosted search agent) – external verifier that cross-checks low-confidence brands/products.
+SearXNG (meta-search backend) – supplies web search results for Perplexica/Ollama summarization.
+Merchant Knowledge Base + alias dictionary – curated data source for brand/category grounding.
+Cache/Memory store (SQLite or JSON + hash) – saves previous Perplexica/OCR outcomes to avoid repeat lookups.
+Vector store (llangraph) – RAG index fed by the cache/KB for quick similarity retrieval before hitting search.
+Rule engine/validator (custom code) – enforces platform, region, and category sanity checks across agent outputs.
+
+  ✅ ALL 11 AGENTS BUILT:
+
+  0. Base-Agent: Region Validator (DATA QUALITY GATEKEEPER!) ✅
+  1. Agent 1: Text Extractor (Vision) ✅
+  2. Agent 2: Product Knowledge Lookup (DB Cache) ✅
+  3. Agent 3: Subscription Detector ✅
+  4. Agent 4: Brand/Restaurant Extractor ✅
+  5. Agent 5: Product Type Classifier ✅
+  6. Agent 6: Web Search Validator ✅
+  7. Agent 7 V2: Food Category Classifier (Scoring, Granular Arabic) ✅
+  8. Agent 8: Offer Extractor (Regex + LLM, Bilingual) ✅
+  9. Agent 9: Audience Detector (Multi-Category Intelligence) ✅
+  10. Agent 10: Theme Analyzer (Multi-Category Themes) ✅
+  11: Agent 11: Output summary per campaign
+  

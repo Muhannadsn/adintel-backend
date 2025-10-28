@@ -1,0 +1,1 @@
+# Abstract interface defining `save_analysis()`, `get_analysis()`, `list_campaigns()` for all storage backends

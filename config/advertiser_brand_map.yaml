@@ -1,0 +1,42 @@
+---
+advertiser_brand_map:
+  # Core food delivery platforms
+  # ⚠️ PLATFORMS DISABLED: Platform advertisers promote MERCHANT brands (Papa John's, DeLonghi, etc.)
+  # Platform brands should only be detected when they advertise their OWN services (subscriptions, etc.)
+  # Let the Brand Extractor find the actual merchant from the ad content!
+  #
+  # AR14306592000630063105:  # Talabat
+  #   - Talabat
+  #   - Talabat Mart
+  #   - Talabat Pro
+  # AR02245493152427278337:  # Keeta
+  #   - Keeta
+  #   - Keeta Mart
+  # AR13676304484790173697:  # Deliveroo
+  #   - Deliveroo
+  #   - Deliveroo Editions
+  # AR08778154730519003137:  # Rafiq
+  #   - Rafiq
+  #   - Rafiq Mart
+  # AR12079153035289296897:  # Snoonu
+  #   - Snoonu
+  #   - Snoomart
+  #   - S Plus
+
+  # Direct-brand advertisers used in orchestrator demo / electronics & fashion flows
+  AR_ELECTRONICS:
+    - Samsung
+    - Apple
+    - Xiaomi
+  AR_FASHION_STORE:
+    - Modest Fashion Boutique
+    - Abaya House
+  AR_PHARMACY:
+    - Doha Pharmacy
+
+  # Placeholder entries for direct brand advertisers.
+  # Replace the keys below with real advertiser_id values as the KB grows.
+  # AR00000000000000000000: ["Samsung"]
+  # AR00000000000000000001: ["Apple"]
+  # AR00000000000000000002: ["H&M"]
+  # AR00000000000000000003: ["Nike"]

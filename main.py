@@ -1,0 +1,1 @@
+# Orchestrates the entire pipeline - reads CSV via storage, extracts screenshots via GATC extractor, analyzes via Ollama, saves results, generates summary reports

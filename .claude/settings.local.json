@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/muhannadsaad/Desktop/scraped_data/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
