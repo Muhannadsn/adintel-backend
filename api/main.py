@@ -275,6 +275,33 @@ async def upload_database(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload database: {str(e)}")
 
+@app.get("/api/download-database")
+async def download_database():
+    """
+    Download the current database file.
+    Use this to backup or sync the deployed database to your local machine.
+
+    Usage:
+    curl -O https://your-backend-url/api/download-database
+    """
+    try:
+        db_path = Path("data/adintel.db")
+
+        if not db_path.exists():
+            raise HTTPException(status_code=404, detail="Database file not found")
+
+        return Response(
+            content=db_path.read_bytes(),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f"attachment; filename=adintel.db"
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to download database: {str(e)}")
+
 @app.post("/api/scrape", response_model=ScrapeResponse)
 async def scrape_ads(request: ScrapeRequest, background_tasks: BackgroundTasks):
     """
