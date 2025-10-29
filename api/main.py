@@ -255,7 +255,7 @@ async def upload_database(file: UploadFile = File(...)):
 
     try:
         # Save the uploaded file
-        db_path = Path("data/ads.db")
+        db_path = Path("data/adintel.db")
         db_path.parent.mkdir(parents=True, exist_ok=True)
 
         with db_path.open("wb") as buffer:
