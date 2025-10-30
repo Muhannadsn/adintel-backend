@@ -240,6 +240,34 @@ def health_check():
     """Health check endpoint for Railway"""
     return {"status": "healthy", "service": "adintel-backend"}
 
+@app.get("/debug/database")
+def debug_database():
+    """Debug endpoint to check database connection and data"""
+    if not DB_AVAILABLE or db is None:
+        return {"error": "Database not available"}
+
+    try:
+        # Check database type
+        db_type = "PostgreSQL" if db.use_postgres else "SQLite"
+        db_url = os.environ.get('DATABASE_URL', 'Not set')
+
+        # Count records
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM ads")
+        ad_count = cursor.fetchone()[0]
+        conn.close()
+
+        return {
+            "database_type": db_type,
+            "database_url_set": bool(db_url != 'Not set'),
+            "database_url_preview": db_url[:50] + "..." if db_url != 'Not set' else None,
+            "ad_count": ad_count,
+            "use_postgres": db.use_postgres
+        }
+    except Exception as e:
+        return {"error": str(e), "traceback": str(e.__traceback__)}
+
 @app.post("/api/upload-database")
 async def upload_database(file: UploadFile = File(...)):
     """
