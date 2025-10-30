@@ -895,16 +895,30 @@ async def get_competitor_insights(advertiser_id: str):
         # Calculate REAL trend (compare last 7 days vs previous 7 days)
         from datetime import datetime, timedelta
         now = datetime.now()
-        seven_days_ago = (now - timedelta(days=7)).strftime('%Y-%m-%d')
-        fourteen_days_ago = (now - timedelta(days=14)).strftime('%Y-%m-%d')
+        seven_days_ago = now - timedelta(days=7)
+        fourteen_days_ago = now - timedelta(days=14)
+
+        # Helper function to convert first_seen_date to datetime for comparison
+        def to_datetime(date_val):
+            if isinstance(date_val, datetime):
+                return date_val
+            if isinstance(date_val, str):
+                try:
+                    return datetime.strptime(date_val, '%Y-%m-%d %H:%M:%S')
+                except:
+                    try:
+                        return datetime.strptime(date_val, '%Y-%m-%d')
+                    except:
+                        return datetime.min
+            return datetime.min
 
         # Count ads in last 7 days
-        last_week_ads = [ad for ad in ads if ad.get('first_seen_date', '') >= seven_days_ago]
+        last_week_ads = [ad for ad in ads if to_datetime(ad.get('first_seen_date')) >= seven_days_ago]
 
         # Count ads in previous 7 days (8-14 days ago)
         previous_week_ads = [
             ad for ad in ads
-            if fourteen_days_ago <= ad.get('first_seen_date', '') < seven_days_ago
+            if fourteen_days_ago <= to_datetime(ad.get('first_seen_date')) < seven_days_ago
         ]
 
         last_week_count = len(last_week_ads)
@@ -928,18 +942,16 @@ async def get_competitor_insights(advertiser_id: str):
                 trend_percent = 0
 
         # Calculate Share of Voice (% of ads in last 30 days only)
-        from datetime import datetime, timedelta
-        thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        thirty_days_ago = now - timedelta(days=30)
 
         # Get all ads from last 30 days
         all_recent_ads = []
         for ad in db.get_all_ads(active_only=True):
-            first_seen = ad.get('first_seen_date', '')
-            if first_seen >= thirty_days_ago:
+            if to_datetime(ad.get('first_seen_date')) >= thirty_days_ago:
                 all_recent_ads.append(ad)
 
         # Get this competitor's ads from last 30 days
-        competitor_recent_ads = [ad for ad in ads if ad.get('first_seen_date', '') >= thirty_days_ago]
+        competitor_recent_ads = [ad for ad in ads if to_datetime(ad.get('first_seen_date')) >= thirty_days_ago]
 
         # Calculate share of voice (more accurate than "market share")
         share_of_voice = round((len(competitor_recent_ads) / len(all_recent_ads)) * 100, 1) if all_recent_ads else 0
