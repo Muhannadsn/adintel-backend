@@ -1754,12 +1754,18 @@ async def delete_ad(ad_id: int):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.options("/api/ads/{ad_id}")
+async def ads_options(ad_id: int):
+    """Handle CORS preflight for PATCH requests"""
+    return {"status": "ok"}
+
 @app.patch("/api/ads/{ad_id}")
 async def update_ad(ad_id: int, updates: Dict[str, Any] = Body(...)):
     """Update ad fields (product_category, product_name, etc.)"""
-    print(f"PATCH /api/ads/{ad_id} - Received updates: {updates}")
+    print(f"🔄 PATCH /api/ads/{ad_id} - Received updates: {updates}")
     try:
         if not DB_AVAILABLE or not db:
+            print(f"❌ Database not available for ad {ad_id}")
             raise HTTPException(status_code=503, detail="Database not available")
 
         conn = db._get_connection()
@@ -1806,6 +1812,7 @@ async def update_ad(ad_id: int, updates: Dict[str, Any] = Body(...)):
                 )
 
             conn.commit()
+            print(f"✅ Successfully updated ad {ad_id} with fields: {list(update_fields.keys())}")
         finally:
             conn.close()
 
@@ -1818,7 +1825,7 @@ async def update_ad(ad_id: int, updates: Dict[str, Any] = Body(...)):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error updating ad: {e}")
+        print(f"❌ Error updating ad {ad_id}: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
