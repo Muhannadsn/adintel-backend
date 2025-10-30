@@ -177,6 +177,14 @@ class AdDatabase:
                 cursor.execute('ALTER TABLE ad_enrichment ADD COLUMN embedding_vector TEXT')
                 print("  🧠 Added embedding_vector column (RAG-ready)")
 
+            # Add manually_edited flag to protect user corrections from AI overwrite
+            if 'manually_edited' not in columns:
+                if self.use_postgres:
+                    cursor.execute('ALTER TABLE ad_enrichment ADD COLUMN manually_edited BOOLEAN DEFAULT FALSE')
+                else:
+                    cursor.execute('ALTER TABLE ad_enrichment ADD COLUMN manually_edited BOOLEAN DEFAULT 0')
+                print("  ✏️  Added manually_edited column (protects user corrections)")
+
             # Table 3: Scrape runs (for tracking)
             cursor.execute(f'''
                 CREATE TABLE IF NOT EXISTS scrape_runs (
@@ -292,29 +300,41 @@ class AdDatabase:
 
                     # Use ON CONFLICT for Postgres, INSERT OR REPLACE for SQLite
                     if self.use_postgres:
+                        # Check if manually edited before overwriting
                         cursor.execute(f'''
-                            INSERT INTO ad_enrichment
-                            (ad_id, product_category, product_name, messaging_themes,
-                             primary_theme, audience_segment, offer_type, offer_details,
-                             confidence_score, analysis_model, is_qatar_only,
-                             brand, food_category, detected_region, rejected_wrong_region)
-                            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
-                            ON CONFLICT (ad_id) DO UPDATE SET
-                                product_category = EXCLUDED.product_category,
-                                product_name = EXCLUDED.product_name,
-                                messaging_themes = EXCLUDED.messaging_themes,
-                                primary_theme = EXCLUDED.primary_theme,
-                                audience_segment = EXCLUDED.audience_segment,
-                                offer_type = EXCLUDED.offer_type,
-                                offer_details = EXCLUDED.offer_details,
-                                confidence_score = EXCLUDED.confidence_score,
-                                analysis_model = EXCLUDED.analysis_model,
-                                is_qatar_only = EXCLUDED.is_qatar_only,
-                                brand = EXCLUDED.brand,
-                                food_category = EXCLUDED.food_category,
-                                detected_region = EXCLUDED.detected_region,
-                                rejected_wrong_region = EXCLUDED.rejected_wrong_region
-                        ''', (
+                            SELECT manually_edited FROM ad_enrichment WHERE ad_id = {ph}
+                        ''', (ad_id,))
+                        result = cursor.fetchone()
+                        is_manually_edited = result and result[0] if result else False
+
+                        if is_manually_edited:
+                            # Skip updating manually edited ads
+                            print(f"  ✏️  Skipping ad {ad_id} - manually edited by user")
+                        else:
+                            cursor.execute(f'''
+                                INSERT INTO ad_enrichment
+                                (ad_id, product_category, product_name, messaging_themes,
+                                 primary_theme, audience_segment, offer_type, offer_details,
+                                 confidence_score, analysis_model, is_qatar_only,
+                                 brand, food_category, detected_region, rejected_wrong_region, manually_edited)
+                                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, FALSE)
+                                ON CONFLICT (ad_id) DO UPDATE SET
+                                    product_category = EXCLUDED.product_category,
+                                    product_name = EXCLUDED.product_name,
+                                    messaging_themes = EXCLUDED.messaging_themes,
+                                    primary_theme = EXCLUDED.primary_theme,
+                                    audience_segment = EXCLUDED.audience_segment,
+                                    offer_type = EXCLUDED.offer_type,
+                                    offer_details = EXCLUDED.offer_details,
+                                    confidence_score = EXCLUDED.confidence_score,
+                                    analysis_model = EXCLUDED.analysis_model,
+                                    is_qatar_only = EXCLUDED.is_qatar_only,
+                                    brand = EXCLUDED.brand,
+                                    food_category = EXCLUDED.food_category,
+                                    detected_region = EXCLUDED.detected_region,
+                                    rejected_wrong_region = EXCLUDED.rejected_wrong_region
+                                WHERE ad_enrichment.manually_edited = FALSE
+                            ''', (
                             ad_id,
                             ad.get('product_category'),
                             ad.get('product_name'),
@@ -332,30 +352,41 @@ class AdDatabase:
                             ad.get('rejected_wrong_region', False)  # Region filter flag
                         ))
                     else:
+                        # SQLite: Check if manually edited before overwriting
                         cursor.execute(f'''
-                            INSERT OR REPLACE INTO ad_enrichment
-                            (ad_id, product_category, product_name, messaging_themes,
-                             primary_theme, audience_segment, offer_type, offer_details,
-                             confidence_score, analysis_model, is_qatar_only,
-                             brand, food_category, detected_region, rejected_wrong_region)
-                            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
-                        ''', (
-                            ad_id,
-                            ad.get('product_category'),
-                            ad.get('product_name'),
-                            themes_json,
-                            ad.get('primary_theme'),
-                            ad.get('audience_segment'),
-                            ad.get('offer_type'),
-                            ad.get('offer_details'),
-                            ad.get('confidence_score'),
-                            ad.get('analysis_model', 'orchestrator'),
-                            ad.get('is_qatar_only', True),  # Default to True (Qatar)
-                            ad.get('brand'),  # Vision-extracted brand
-                            ad.get('food_category'),  # Vision-extracted food category
-                            ad.get('detected_region'),  # Region validator result
-                            ad.get('rejected_wrong_region', False)  # Region filter flag
-                        ))
+                            SELECT manually_edited FROM ad_enrichment WHERE ad_id = {ph}
+                        ''', (ad_id,))
+                        result = cursor.fetchone()
+                        is_manually_edited = result and result[0] if result else False
+
+                        if is_manually_edited:
+                            # Skip updating manually edited ads
+                            print(f"  ✏️  Skipping ad {ad_id} - manually edited by user")
+                        else:
+                            cursor.execute(f'''
+                                INSERT OR REPLACE INTO ad_enrichment
+                                (ad_id, product_category, product_name, messaging_themes,
+                                 primary_theme, audience_segment, offer_type, offer_details,
+                                 confidence_score, analysis_model, is_qatar_only,
+                                 brand, food_category, detected_region, rejected_wrong_region, manually_edited)
+                                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, 0)
+                            ''', (
+                                ad_id,
+                                ad.get('product_category'),
+                                ad.get('product_name'),
+                                themes_json,
+                                ad.get('primary_theme'),
+                                ad.get('audience_segment'),
+                                ad.get('offer_type'),
+                                ad.get('offer_details'),
+                                ad.get('confidence_score'),
+                                ad.get('analysis_model', 'orchestrator'),
+                                ad.get('is_qatar_only', True),  # Default to True (Qatar)
+                                ad.get('brand'),  # Vision-extracted brand
+                                ad.get('food_category'),  # Vision-extracted food category
+                                ad.get('detected_region'),  # Region validator result
+                                ad.get('rejected_wrong_region', False)  # Region filter flag
+                            ))
 
             conn.commit()
 

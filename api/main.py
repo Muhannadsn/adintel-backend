@@ -1793,8 +1793,12 @@ async def update_ad(ad_id: int, updates: Dict[str, Any] = Body(...)):
             cursor.execute(f"SELECT ad_id FROM ad_enrichment WHERE ad_id = {ph}", (ad_id,))
             enrichment_exists = cursor.fetchone() is not None
 
+            # Mark as manually edited to protect from AI overwrite
+            true_val = db._true_val()
+
             if enrichment_exists:
-                # Update existing record
+                # Update existing record and mark as manually edited
+                update_fields['manually_edited'] = true_val
                 set_clause = ", ".join([f"{field} = {ph}" for field in update_fields.keys()])
                 values = list(update_fields.values()) + [ad_id]
                 cursor.execute(
@@ -1802,10 +1806,10 @@ async def update_ad(ad_id: int, updates: Dict[str, Any] = Body(...)):
                     values
                 )
             else:
-                # Insert new record
-                fields = ['ad_id'] + list(update_fields.keys())
+                # Insert new record with manually_edited flag
+                fields = ['ad_id', 'manually_edited'] + list(update_fields.keys())
                 placeholders = ','.join([ph] * len(fields))
-                values = [ad_id] + list(update_fields.values())
+                values = [ad_id, true_val] + list(update_fields.values())
                 cursor.execute(
                     f"INSERT INTO ad_enrichment ({','.join(fields)}) VALUES ({placeholders})",
                     values
