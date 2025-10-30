@@ -1690,7 +1690,7 @@ async def get_strategic_insights(module: str):
             ]
         }
 
-@app.delete("/api/ads/{ad_id}")
+@app.delete("/api/ad-content/{ad_id}")
 async def delete_ad(ad_id: int):
     """
     Delete an ad from the database (marks as rejected/deleted)
@@ -1754,15 +1754,15 @@ async def delete_ad(ad_id: int):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.options("/api/ads/{ad_id}")
+@app.options("/api/ad-content/{ad_id}")
 async def ads_options(ad_id: int):
     """Handle CORS preflight for PATCH requests"""
     return {"status": "ok"}
 
-@app.patch("/api/ads/{ad_id}")
+@app.patch("/api/ad-content/{ad_id}")
 async def update_ad(ad_id: int, updates: Dict[str, Any] = Body(...)):
     """Update ad fields (product_category, product_name, etc.)"""
-    print(f"🔄 PATCH /api/ads/{ad_id} - Received updates: {updates}")
+    print(f"🔄 PATCH /api/ad-content/{ad_id} - Received updates: {updates}")
     try:
         if not DB_AVAILABLE or not db:
             print(f"❌ Database not available for ad {ad_id}")
