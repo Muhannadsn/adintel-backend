@@ -434,50 +434,58 @@ async def list_competitors():
     if DB_AVAILABLE and db:
         try:
             # Query database for all advertisers (excluding rejected ads)
-            import sqlite3
-            with sqlite3.connect(db.db_path) as conn:
-                cursor = conn.execute("""
-                    SELECT
-                        a.advertiser_id,
-                        COUNT(*) as total_ads,
-                        MAX(a.created_at) as last_scraped
-                    FROM ads a
-                    LEFT JOIN ad_enrichment e ON a.id = e.ad_id
-                    WHERE a.advertiser_id IS NOT NULL
-                      AND (e.rejected_wrong_region = 0 OR e.rejected_wrong_region IS NULL)
-                    GROUP BY a.advertiser_id
-                """)
+            # Use database abstraction layer to support both SQLite and Postgres
+            conn = db._get_connection()
+            cursor = conn.cursor()
 
-                for row in cursor.fetchall():
-                    advertiser_id, total_ads, last_scraped_str = row
+            # Handle SQL differences between SQLite (0/1) and Postgres (FALSE/TRUE)
+            rejected_condition = "e.rejected_wrong_region = FALSE" if db.use_postgres else "e.rejected_wrong_region = 0"
 
-                    # Skip unknown advertisers (where name == ID)
-                    advertiser_name = get_advertiser_name(advertiser_id)
-                    if advertiser_name == advertiser_id:
-                        continue
+            query = f"""
+                SELECT
+                    a.advertiser_id,
+                    COUNT(*) as total_ads,
+                    MAX(a.created_at) as last_scraped
+                FROM ads a
+                LEFT JOIN ad_enrichment e ON a.id = e.ad_id
+                WHERE a.advertiser_id IS NOT NULL
+                  AND ({rejected_condition} OR e.rejected_wrong_region IS NULL)
+                GROUP BY a.advertiser_id
+            """
+            cursor.execute(query)
 
-                    # Parse datetime string to datetime object
-                    last_scraped_dt = None
-                    if last_scraped_str:
-                        try:
-                            last_scraped_dt = datetime.strptime(last_scraped_str, "%Y-%m-%d %H:%M:%S")
-                        except:
-                            pass
+            for row in cursor.fetchall():
+                advertiser_id, total_ads, last_scraped_str = row
 
-                    # Use timestamp for mtime comparison
-                    mtime = last_scraped_dt.timestamp() if last_scraped_dt else 0
+                # Skip unknown advertisers (where name == ID)
+                advertiser_name = get_advertiser_name(advertiser_id)
+                if advertiser_name == advertiser_id:
+                    continue
 
-                    competitors_dict[advertiser_id] = {
-                        'mtime': mtime,
-                        'data': CompetitorSummary(
-                            name=advertiser_name,
-                            advertiser_id=advertiser_id,
-                            region="QA",  # Default region
-                            total_ads=total_ads,
-                            last_scraped=last_scraped_dt,
-                            csv_file=None  # Database source
-                        )
-                    }
+                # Parse datetime string to datetime object
+                last_scraped_dt = None
+                if last_scraped_str:
+                    try:
+                        last_scraped_dt = datetime.strptime(last_scraped_str, "%Y-%m-%d %H:%M:%S")
+                    except:
+                        pass
+
+                # Use timestamp for mtime comparison
+                mtime = last_scraped_dt.timestamp() if last_scraped_dt else 0
+
+                competitors_dict[advertiser_id] = {
+                    'mtime': mtime,
+                    'data': CompetitorSummary(
+                        name=advertiser_name,
+                        advertiser_id=advertiser_id,
+                        region="QA",  # Default region
+                        total_ads=total_ads,
+                        last_scraped=last_scraped_dt,
+                        csv_file=None  # Database source
+                    )
+                }
+
+            conn.close()
         except Exception as e:
             print(f"⚠️  Database query failed, falling back to CSV: {e}")
 
