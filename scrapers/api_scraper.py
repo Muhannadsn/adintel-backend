@@ -34,12 +34,15 @@ class GATCAPIScraper:
     BASE_URL = "https://adstransparency.google.com"
     API_ENDPOINT = "/anji/_/rpc/SearchService/SearchCreatives"
 
-    def __init__(self, cookies=None):
+    def __init__(self, cookies=None, use_proxy=True, proxy_config=None):
         """
         Initialize with cookies for authentication
 
         Args:
             cookies: Dict of cookies from authenticated session
+            use_proxy: Whether to use Bright Data proxy (default: True for legal compliance)
+            proxy_config: Custom proxy config dict with keys: host, port, user, password
+                         If None, uses default Bright Data datacenter proxy
         """
         self.session = requests.Session()
 
@@ -59,6 +62,26 @@ class GATCAPIScraper:
             'x-requested-with': 'XMLHttpRequest',
             'x-same-domain': '1',
         })
+
+        # Configure Bright Data proxy for legal compliance
+        if use_proxy:
+            if proxy_config is None:
+                # Default Bright Data datacenter proxy
+                proxy_config = {
+                    'host': os.getenv('PROXY_HOST', 'brd.superproxy.io'),
+                    'port': os.getenv('PROXY_PORT', '33335'),
+                    'user': os.getenv('PROXY_USER', 'brd-customer-hl_b295a417-zone-datacenter_proxy2'),
+                    'password': os.getenv('PROXY_PASS', '90wo2m3e40vv')
+                }
+
+            proxy_url = f"http://{proxy_config['user']}:{proxy_config['password']}@{proxy_config['host']}:{proxy_config['port']}"
+            self.session.proxies = {
+                'http': proxy_url,
+                'https': proxy_url
+            }
+            print(f"🌍 Using Bright Data proxy: {proxy_config['host']}:{proxy_config['port']}")
+        else:
+            print("⚠️  WARNING: Running without proxy (may be illegal in Qatar)")
 
         if cookies:
             self.session.cookies.update(cookies)
