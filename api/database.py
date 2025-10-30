@@ -60,6 +60,14 @@ class AdDatabase:
         else:
             return sqlite3.connect(self.db_path)
 
+    def _get_dict_cursor(self, conn):
+        """Get a cursor that returns rows as dictionaries"""
+        if self.use_postgres:
+            return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        else:
+            conn.row_factory = sqlite3.Row
+            return conn.cursor()
+
     def _param_placeholder(self):
         """Get parameter placeholder for SQL queries (? for SQLite, %s for Postgres)"""
         return '%s' if self.use_postgres else '?'
@@ -419,49 +427,49 @@ class AdDatabase:
         Returns:
             List of ad dicts with enrichment fields
         """
-        with self._get_connection() as conn:
-            conn.row_factory = sqlite3.Row  # Return rows as dicts
-            cursor = conn.cursor()
+        conn = self._get_connection()
+        cursor = self._get_dict_cursor(conn)  # Get cursor that returns dicts
 
-            ph = self._param_placeholder()
-            false_val = 'FALSE' if self.use_postgres else '0'
-            true_val = 'TRUE' if self.use_postgres else '1'
+        ph = self._param_placeholder()
+        false_val = 'FALSE' if self.use_postgres else '0'
+        true_val = 'TRUE' if self.use_postgres else '1'
 
-            query = f'''
-                SELECT
-                    a.*,
-                    e.product_category,
-                    e.product_name,
-                    e.messaging_themes,
-                    e.primary_theme,
-                    e.audience_segment,
-                    e.offer_type,
-                    e.offer_details,
-                    e.confidence_score,
-                    e.brand,
-                    e.food_category,
-                    e.detected_region,
-                    e.rejected_wrong_region
-                FROM ads a
-                LEFT JOIN ad_enrichment e ON a.id = e.ad_id
-                WHERE a.advertiser_id = {ph}
-                  AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)
-            '''
+        query = f'''
+            SELECT
+                a.*,
+                e.product_category,
+                e.product_name,
+                e.messaging_themes,
+                e.primary_theme,
+                e.audience_segment,
+                e.offer_type,
+                e.offer_details,
+                e.confidence_score,
+                e.brand,
+                e.food_category,
+                e.detected_region,
+                e.rejected_wrong_region
+            FROM ads a
+            LEFT JOIN ad_enrichment e ON a.id = e.ad_id
+            WHERE a.advertiser_id = {ph}
+              AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)
+        '''
 
-            if active_only:
-                query += f' AND a.is_active = {true_val}'
-            cursor.execute(query, (advertiser_id,))
-            rows = cursor.fetchall()
+        if active_only:
+            query += f' AND a.is_active = {true_val}'
+        cursor.execute(query, (advertiser_id,))
+        rows = cursor.fetchall()
 
-            ads = []
-            for row in rows:
-                ad = dict(row)
-                # Parse JSON messaging_themes back to dict
-                if ad.get('messaging_themes'):
-                    ad['messaging_themes'] = json.loads(ad['messaging_themes'])
-                ads.append(ad)
+        ads = []
+        for row in rows:
+            ad = dict(row)
+            # Parse JSON messaging_themes back to dict
+            if ad.get('messaging_themes'):
+                ad['messaging_themes'] = json.loads(ad['messaging_themes'])
+            ads.append(ad)
 
-            return ads
+        conn.close()
+        return ads
 
     def get_products_by_competitor(self, advertiser_id: str = None) -> List[Dict]:
         """
