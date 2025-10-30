@@ -947,7 +947,7 @@ class AdDatabase:
                   AND e.product_name != 'Unknown'
                   AND e.product_category = 'Specific Restaurant/Brand Promo'
                   AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)
-                GROUP BY e.product_name, a.advertiser_id
+                GROUP BY e.product_name, e.product_category, a.advertiser_id
                 ORDER BY ad_count DESC
                 LIMIT 20
             '''
