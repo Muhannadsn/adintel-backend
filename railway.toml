@@ -1,0 +1,7 @@
+[build]
+
+[deploy]
+startCommand = "bash railway_start.sh"
+
+[volumes]
+data = "/app/data"
