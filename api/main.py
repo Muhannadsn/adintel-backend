@@ -1696,31 +1696,37 @@ async def delete_ad(ad_id: int):
                 detail="Database not available"
             )
 
-        import sqlite3
-        with sqlite3.connect(db.db_path) as conn:
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        ph = db._param_placeholder()
+
+        try:
             # First check if ad exists
-            cursor = conn.execute("SELECT id FROM ads WHERE id = ?", (ad_id,))
+            cursor.execute(f"SELECT id FROM ads WHERE id = {ph}", (ad_id,))
             if not cursor.fetchone():
                 raise HTTPException(status_code=404, detail="Ad not found")
 
             # Mark the ad as rejected (soft delete)
-            conn.execute(
-                "UPDATE ad_enrichment SET rejected_wrong_region = 1 WHERE ad_id = ?",
+            true_val = db._true_val()
+            cursor.execute(
+                f"UPDATE ad_enrichment SET rejected_wrong_region = {true_val} WHERE ad_id = {ph}",
                 (ad_id,)
             )
 
             # If no enrichment record exists, create one
-            cursor = conn.execute(
-                "SELECT ad_id FROM ad_enrichment WHERE ad_id = ?",
+            cursor.execute(
+                f"SELECT ad_id FROM ad_enrichment WHERE ad_id = {ph}",
                 (ad_id,)
             )
             if not cursor.fetchone():
-                conn.execute(
-                    "INSERT INTO ad_enrichment (ad_id, rejected_wrong_region) VALUES (?, 1)",
+                cursor.execute(
+                    f"INSERT INTO ad_enrichment (ad_id, rejected_wrong_region) VALUES ({ph}, {true_val})",
                     (ad_id,)
                 )
 
             conn.commit()
+        finally:
+            conn.close()
 
         return {
             "success": True,
@@ -1743,10 +1749,13 @@ async def update_ad(ad_id: int, updates: dict):
         if not DB_AVAILABLE or not db:
             raise HTTPException(status_code=503, detail="Database not available")
 
-        import sqlite3
-        with sqlite3.connect(db.db_path) as conn:
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        ph = db._param_placeholder()
+
+        try:
             # Check if ad exists
-            cursor = conn.execute("SELECT id FROM ads WHERE id = ?", (ad_id,))
+            cursor.execute(f"SELECT id FROM ads WHERE id = {ph}", (ad_id,))
             if not cursor.fetchone():
                 raise HTTPException(status_code=404, detail="Ad not found")
 
@@ -1762,28 +1771,30 @@ async def update_ad(ad_id: int, updates: dict):
                 raise HTTPException(status_code=400, detail="No valid fields to update")
 
             # Check if enrichment record exists
-            cursor = conn.execute("SELECT ad_id FROM ad_enrichment WHERE ad_id = ?", (ad_id,))
+            cursor.execute(f"SELECT ad_id FROM ad_enrichment WHERE ad_id = {ph}", (ad_id,))
             enrichment_exists = cursor.fetchone() is not None
 
             if enrichment_exists:
                 # Update existing record
-                set_clause = ", ".join([f"{field} = ?" for field in update_fields.keys()])
+                set_clause = ", ".join([f"{field} = {ph}" for field in update_fields.keys()])
                 values = list(update_fields.values()) + [ad_id]
-                conn.execute(
-                    f"UPDATE ad_enrichment SET {set_clause} WHERE ad_id = ?",
+                cursor.execute(
+                    f"UPDATE ad_enrichment SET {set_clause} WHERE ad_id = {ph}",
                     values
                 )
             else:
                 # Insert new record
                 fields = ['ad_id'] + list(update_fields.keys())
-                placeholders = ','.join(['?'] * len(fields))
+                placeholders = ','.join([ph] * len(fields))
                 values = [ad_id] + list(update_fields.values())
-                conn.execute(
+                cursor.execute(
                     f"INSERT INTO ad_enrichment ({','.join(fields)}) VALUES ({placeholders})",
                     values
                 )
 
             conn.commit()
+        finally:
+            conn.close()
 
         return {
             "success": True,

@@ -372,49 +372,49 @@ class AdDatabase:
         Returns:
             List of ad dicts with enrichment fields
         """
-        with self._get_connection() as conn:
-            conn.row_factory = sqlite3.Row  # Return rows as dicts
-            cursor = conn.cursor()
+        conn = self._get_connection()
+        cursor = self._get_dict_cursor(conn)  # Use database-agnostic dict cursor
 
-            false_val = 'FALSE' if self.use_postgres else '0'
-            true_val = 'TRUE' if self.use_postgres else '1'
+        false_val = 'FALSE' if self.use_postgres else '0'
+        true_val = 'TRUE' if self.use_postgres else '1'
 
-            query = f'''
-                SELECT
-                    a.*,
-                    e.product_category,
-                    e.product_name,
-                    e.messaging_themes,
-                    e.primary_theme,
-                    e.audience_segment,
-                    e.offer_type,
-                    e.offer_details,
-                    e.confidence_score,
-                    e.brand,
-                    e.food_category,
-                    e.detected_region,
-                    e.rejected_wrong_region
-                FROM ads a
-                LEFT JOIN ad_enrichment e ON a.id = e.ad_id
-            '''
+        query = f'''
+            SELECT
+                a.*,
+                e.product_category,
+                e.product_name,
+                e.messaging_themes,
+                e.primary_theme,
+                e.audience_segment,
+                e.offer_type,
+                e.offer_details,
+                e.confidence_score,
+                e.brand,
+                e.food_category,
+                e.detected_region,
+                e.rejected_wrong_region
+            FROM ads a
+            LEFT JOIN ad_enrichment e ON a.id = e.ad_id
+        '''
 
-            if active_only:
-                query += f' WHERE a.is_active = {true_val} AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)'
-            else:
-                query += f' WHERE (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)'
+        if active_only:
+            query += f' WHERE a.is_active = {true_val} AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)'
+        else:
+            query += f' WHERE (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)'
 
-            cursor.execute(query)
-            rows = cursor.fetchall()
+        cursor.execute(query)
+        rows = cursor.fetchall()
 
-            ads = []
-            for row in rows:
-                ad = dict(row)
-                # Parse JSON messaging_themes back to dict
-                if ad.get('messaging_themes'):
-                    ad['messaging_themes'] = json.loads(ad['messaging_themes'])
-                ads.append(ad)
+        ads = []
+        for row in rows:
+            ad = dict(row)
+            # Parse JSON messaging_themes back to dict
+            if ad.get('messaging_themes'):
+                ad['messaging_themes'] = json.loads(ad['messaging_themes'])
+            ads.append(ad)
 
-            return ads
+        conn.close()
+        return ads
 
     def get_ads_by_competitor(self, advertiser_id: str, active_only: bool = True) -> List[Dict]:
         """
