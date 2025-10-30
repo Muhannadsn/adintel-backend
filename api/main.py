@@ -2,7 +2,7 @@
 """
 AdIntel API - FastAPI backend for ad intelligence platform
 """
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, HttpUrl
@@ -1755,8 +1755,9 @@ async def delete_ad(ad_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.patch("/api/ads/{ad_id}")
-async def update_ad(ad_id: int, updates: dict):
+async def update_ad(ad_id: int, updates: Dict[str, Any] = Body(...)):
     """Update ad fields (product_category, product_name, etc.)"""
+    print(f"PATCH /api/ads/{ad_id} - Received updates: {updates}")
     try:
         if not DB_AVAILABLE or not db:
             raise HTTPException(status_code=503, detail="Database not available")
