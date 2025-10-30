@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
 Database Layer - Stores and retrieves ads with AI enrichment data
-Uses SQLite for simplicity (can migrate to PostgreSQL later)
+Supports both SQLite (local) and PostgreSQL (production)
 """
 
 import sqlite3
+import psycopg2
+import psycopg2.extras
 import json
+import os
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -27,45 +30,83 @@ class AdDatabase:
         Initialize database connection
 
         Args:
-            db_path: Path to SQLite database file
+            db_path: Path to SQLite database file (only used if DATABASE_URL not set)
                     Defaults to: data/adintel.db
         """
-        if db_path is None:
-            # Default to data directory
-            project_root = Path(__file__).parent.parent
-            data_dir = project_root / "data"
-            data_dir.mkdir(exist_ok=True)
-            db_path = str(data_dir / "adintel.db")
+        # Check if DATABASE_URL is set (for Postgres)
+        self.database_url = os.environ.get('DATABASE_URL')
+        self.use_postgres = bool(self.database_url)
 
-        self.db_path = db_path
+        if self.use_postgres:
+            self.db_path = None
+            print(f"✅ Database initialized: PostgreSQL")
+        else:
+            # Use SQLite for local development
+            if db_path is None:
+                project_root = Path(__file__).parent.parent
+                data_dir = project_root / "data"
+                data_dir.mkdir(exist_ok=True)
+                db_path = str(data_dir / "adintel.db")
+
+            self.db_path = db_path
+            print(f"✅ Database initialized: SQLite at {self.db_path}")
+
         self._init_schema()
 
-        print(f"✅ Database initialized: {self.db_path}")
+    def _get_connection(self):
+        """Get database connection (Postgres or SQLite)"""
+        if self.use_postgres:
+            return psycopg2.connect(self.database_url)
+        else:
+            return sqlite3.connect(self.db_path)
+
+    def _param_placeholder(self):
+        """Get parameter placeholder for SQL queries (? for SQLite, %s for Postgres)"""
+        return '%s' if self.use_postgres else '?'
+
+    def _true_val(self):
+        """Get TRUE value for SQL queries"""
+        return 'TRUE' if self.use_postgres else '1'
+
+    def _false_val(self):
+        """Get FALSE value for SQL queries"""
+        return 'FALSE' if self.use_postgres else '0'
 
     def _init_schema(self):
         """Create database tables if they don't exist"""
-        with sqlite3.connect(self.db_path) as conn:
+        conn = self._get_connection()
+        try:
             cursor = conn.cursor()
 
+            # SQL syntax differs between SQLite and Postgres
+            if self.use_postgres:
+                id_type = "SERIAL PRIMARY KEY"
+                bool_default = "DEFAULT TRUE"
+                timestamp_default = "DEFAULT CURRENT_TIMESTAMP"
+            else:
+                id_type = "INTEGER PRIMARY KEY AUTOINCREMENT"
+                bool_default = "DEFAULT 1"
+                timestamp_default = "DEFAULT CURRENT_TIMESTAMP"
+
             # Table 1: Raw ads
-            cursor.execute('''
+            cursor.execute(f'''
                 CREATE TABLE IF NOT EXISTS ads (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id {id_type},
                     advertiser_id TEXT NOT NULL,
                     ad_text TEXT,
                     image_url TEXT,
                     html_content TEXT,
                     regions TEXT,
-                    first_seen_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    first_seen_date TIMESTAMP {timestamp_default},
                     last_seen_date TIMESTAMP,
-                    is_active BOOLEAN DEFAULT 1,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_active BOOLEAN {bool_default},
+                    created_at TIMESTAMP {timestamp_default},
                     UNIQUE(advertiser_id, ad_text, image_url)
                 )
             ''')
 
             # Table 2: AI enrichment data
-            cursor.execute('''
+            cursor.execute(f'''
                 CREATE TABLE IF NOT EXISTS ad_enrichment (
                     ad_id INTEGER PRIMARY KEY,
                     product_category TEXT,
@@ -77,18 +118,30 @@ class AdDatabase:
                     offer_details TEXT,
                     confidence_score REAL,
                     analysis_model TEXT,
-                    analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    analyzed_at TIMESTAMP {timestamp_default},
                     FOREIGN KEY (ad_id) REFERENCES ads(id) ON DELETE CASCADE
                 )
             ''')
 
             # Migration-safe: Add new columns if they don't exist
-            cursor.execute("PRAGMA table_info(ad_enrichment)")
-            columns = [col[1] for col in cursor.fetchall()]
+            # Get existing columns (different syntax for SQLite vs Postgres)
+            if self.use_postgres:
+                cursor.execute("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'ad_enrichment'
+                """)
+                columns = [col[0] for col in cursor.fetchall()]
+            else:
+                cursor.execute("PRAGMA table_info(ad_enrichment)")
+                columns = [col[1] for col in cursor.fetchall()]
 
             # Add is_qatar_only (region validation)
             if 'is_qatar_only' not in columns:
-                cursor.execute('ALTER TABLE ad_enrichment ADD COLUMN is_qatar_only BOOLEAN DEFAULT 1')
+                if self.use_postgres:
+                    cursor.execute('ALTER TABLE ad_enrichment ADD COLUMN is_qatar_only BOOLEAN DEFAULT TRUE')
+                else:
+                    cursor.execute('ALTER TABLE ad_enrichment ADD COLUMN is_qatar_only BOOLEAN DEFAULT 1')
                 print("  📍 Added is_qatar_only column")
 
             # Add orchestrator-specific fields
@@ -101,7 +154,10 @@ class AdDatabase:
                 print("  🍔 Added food_category column")
 
             if 'rejected_wrong_region' not in columns:
-                cursor.execute('ALTER TABLE ad_enrichment ADD COLUMN rejected_wrong_region BOOLEAN DEFAULT 0')
+                if self.use_postgres:
+                    cursor.execute('ALTER TABLE ad_enrichment ADD COLUMN rejected_wrong_region BOOLEAN DEFAULT FALSE')
+                else:
+                    cursor.execute('ALTER TABLE ad_enrichment ADD COLUMN rejected_wrong_region BOOLEAN DEFAULT 0')
                 print("  🚫 Added rejected_wrong_region column")
 
             if 'detected_region' not in columns:
@@ -114,22 +170,22 @@ class AdDatabase:
                 print("  🧠 Added embedding_vector column (RAG-ready)")
 
             # Table 3: Scrape runs (for tracking)
-            cursor.execute('''
+            cursor.execute(f'''
                 CREATE TABLE IF NOT EXISTS scrape_runs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id {id_type},
                     advertiser_id TEXT NOT NULL,
-                    run_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    run_date TIMESTAMP {timestamp_default},
                     ads_found INTEGER,
                     ads_new INTEGER,
                     ads_retired INTEGER,
-                    enrichment_enabled BOOLEAN DEFAULT 0
+                    enrichment_enabled BOOLEAN DEFAULT {'FALSE' if self.use_postgres else '0'}
                 )
             ''')
 
             # Table 4: Product Knowledge Base (for caching product lookups)
-            cursor.execute('''
+            cursor.execute(f'''
                 CREATE TABLE IF NOT EXISTS product_knowledge (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id {id_type},
                     product_name TEXT UNIQUE NOT NULL,
                     product_type TEXT NOT NULL,
                     category TEXT,
@@ -138,9 +194,9 @@ class AdDatabase:
                     is_subscription BOOLEAN,
                     metadata TEXT,
                     confidence REAL DEFAULT 0.0,
-                    verified_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    verified_date TIMESTAMP {timestamp_default},
                     search_source TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP {timestamp_default}
                 )
             ''')
 
@@ -153,6 +209,8 @@ class AdDatabase:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_name ON product_knowledge(product_name)')
 
             conn.commit()
+        finally:
+            conn.close()
 
     def save_ads(self, ads: List[Dict], advertiser_id: str = None) -> Dict:
         """
@@ -172,7 +230,7 @@ class AdDatabase:
             'ads_total': len(ads)
         }
 
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
 
             for ad in ads:
@@ -182,9 +240,10 @@ class AdDatabase:
                     continue
 
                 # Check if ad already exists
-                cursor.execute('''
+                ph = self._param_placeholder()
+                cursor.execute(f'''
                     SELECT id, first_seen_date FROM ads
-                    WHERE advertiser_id = ? AND ad_text = ? AND image_url = ?
+                    WHERE advertiser_id = {ph} AND ad_text = {ph} AND image_url = {ph}
                 ''', (adv_id, ad.get('ad_text', ''), ad.get('image_url', '')))
 
                 existing = cursor.fetchone()
@@ -192,18 +251,18 @@ class AdDatabase:
                 if existing:
                     # Update existing ad
                     ad_id, first_seen = existing
-                    cursor.execute('''
+                    cursor.execute(f'''
                         UPDATE ads
                         SET last_seen_date = CURRENT_TIMESTAMP,
-                            is_active = 1
-                        WHERE id = ?
+                            is_active = {'TRUE' if self.use_postgres else '1'}
+                        WHERE id = {ph}
                     ''', (ad_id,))
                     stats['ads_updated'] += 1
                 else:
                     # Insert new ad
-                    cursor.execute('''
+                    cursor.execute(f'''
                         INSERT INTO ads (advertiser_id, ad_text, image_url, html_content, regions)
-                        VALUES (?, ?, ?, ?, ?)
+                        VALUES ({ph}, {ph}, {ph}, {ph}, {ph})
                     ''', (
                         adv_id,
                         ad.get('ad_text', ''),
@@ -211,7 +270,11 @@ class AdDatabase:
                         ad.get('html_content', ''),
                         ad.get('regions', '')
                     ))
-                    ad_id = cursor.lastrowid
+                    if self.use_postgres:
+                        cursor.execute('SELECT lastval()')
+                        ad_id = cursor.fetchone()[0]
+                    else:
+                        ad_id = cursor.lastrowid
                     stats['ads_new'] += 1
 
                 # Save enrichment data if present
@@ -219,30 +282,72 @@ class AdDatabase:
                     # Convert messaging_themes dict to JSON string
                     themes_json = json.dumps(ad.get('messaging_themes', {}))
 
-                    cursor.execute('''
-                        INSERT OR REPLACE INTO ad_enrichment
-                        (ad_id, product_category, product_name, messaging_themes,
-                         primary_theme, audience_segment, offer_type, offer_details,
-                         confidence_score, analysis_model, is_qatar_only,
-                         brand, food_category, detected_region, rejected_wrong_region)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        ad_id,
-                        ad.get('product_category'),
-                        ad.get('product_name'),
-                        themes_json,
-                        ad.get('primary_theme'),
-                        ad.get('audience_segment'),
-                        ad.get('offer_type'),
-                        ad.get('offer_details'),
-                        ad.get('confidence_score'),
-                        ad.get('analysis_model', 'orchestrator'),
-                        ad.get('is_qatar_only', True),  # Default to True (Qatar)
-                        ad.get('brand'),  # Vision-extracted brand
-                        ad.get('food_category'),  # Vision-extracted food category
-                        ad.get('detected_region'),  # Region validator result
-                        ad.get('rejected_wrong_region', False)  # Region filter flag
-                    ))
+                    # Use ON CONFLICT for Postgres, INSERT OR REPLACE for SQLite
+                    if self.use_postgres:
+                        cursor.execute(f'''
+                            INSERT INTO ad_enrichment
+                            (ad_id, product_category, product_name, messaging_themes,
+                             primary_theme, audience_segment, offer_type, offer_details,
+                             confidence_score, analysis_model, is_qatar_only,
+                             brand, food_category, detected_region, rejected_wrong_region)
+                            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                            ON CONFLICT (ad_id) DO UPDATE SET
+                                product_category = EXCLUDED.product_category,
+                                product_name = EXCLUDED.product_name,
+                                messaging_themes = EXCLUDED.messaging_themes,
+                                primary_theme = EXCLUDED.primary_theme,
+                                audience_segment = EXCLUDED.audience_segment,
+                                offer_type = EXCLUDED.offer_type,
+                                offer_details = EXCLUDED.offer_details,
+                                confidence_score = EXCLUDED.confidence_score,
+                                analysis_model = EXCLUDED.analysis_model,
+                                is_qatar_only = EXCLUDED.is_qatar_only,
+                                brand = EXCLUDED.brand,
+                                food_category = EXCLUDED.food_category,
+                                detected_region = EXCLUDED.detected_region,
+                                rejected_wrong_region = EXCLUDED.rejected_wrong_region
+                        ''', (
+                            ad_id,
+                            ad.get('product_category'),
+                            ad.get('product_name'),
+                            themes_json,
+                            ad.get('primary_theme'),
+                            ad.get('audience_segment'),
+                            ad.get('offer_type'),
+                            ad.get('offer_details'),
+                            ad.get('confidence_score'),
+                            ad.get('analysis_model', 'orchestrator'),
+                            ad.get('is_qatar_only', True),  # Default to True (Qatar)
+                            ad.get('brand'),  # Vision-extracted brand
+                            ad.get('food_category'),  # Vision-extracted food category
+                            ad.get('detected_region'),  # Region validator result
+                            ad.get('rejected_wrong_region', False)  # Region filter flag
+                        ))
+                    else:
+                        cursor.execute(f'''
+                            INSERT OR REPLACE INTO ad_enrichment
+                            (ad_id, product_category, product_name, messaging_themes,
+                             primary_theme, audience_segment, offer_type, offer_details,
+                             confidence_score, analysis_model, is_qatar_only,
+                             brand, food_category, detected_region, rejected_wrong_region)
+                            VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                        ''', (
+                            ad_id,
+                            ad.get('product_category'),
+                            ad.get('product_name'),
+                            themes_json,
+                            ad.get('primary_theme'),
+                            ad.get('audience_segment'),
+                            ad.get('offer_type'),
+                            ad.get('offer_details'),
+                            ad.get('confidence_score'),
+                            ad.get('analysis_model', 'orchestrator'),
+                            ad.get('is_qatar_only', True),  # Default to True (Qatar)
+                            ad.get('brand'),  # Vision-extracted brand
+                            ad.get('food_category'),  # Vision-extracted food category
+                            ad.get('detected_region'),  # Region validator result
+                            ad.get('rejected_wrong_region', False)  # Region filter flag
+                        ))
 
             conn.commit()
 
@@ -259,11 +364,14 @@ class AdDatabase:
         Returns:
             List of ad dicts with enrichment fields
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             conn.row_factory = sqlite3.Row  # Return rows as dicts
             cursor = conn.cursor()
 
-            query = '''
+            false_val = 'FALSE' if self.use_postgres else '0'
+            true_val = 'TRUE' if self.use_postgres else '1'
+
+            query = f'''
                 SELECT
                     a.*,
                     e.product_category,
@@ -283,9 +391,9 @@ class AdDatabase:
             '''
 
             if active_only:
-                query += ' WHERE a.is_active = 1 AND (e.rejected_wrong_region = 0 OR e.rejected_wrong_region IS NULL)'
+                query += f' WHERE a.is_active = {true_val} AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)'
             else:
-                query += ' WHERE (e.rejected_wrong_region = 0 OR e.rejected_wrong_region IS NULL)'
+                query += f' WHERE (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)'
 
             cursor.execute(query)
             rows = cursor.fetchall()
@@ -311,11 +419,15 @@ class AdDatabase:
         Returns:
             List of ad dicts with enrichment fields
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             conn.row_factory = sqlite3.Row  # Return rows as dicts
             cursor = conn.cursor()
 
-            query = '''
+            ph = self._param_placeholder()
+            false_val = 'FALSE' if self.use_postgres else '0'
+            true_val = 'TRUE' if self.use_postgres else '1'
+
+            query = f'''
                 SELECT
                     a.*,
                     e.product_category,
@@ -332,13 +444,12 @@ class AdDatabase:
                     e.rejected_wrong_region
                 FROM ads a
                 LEFT JOIN ad_enrichment e ON a.id = e.ad_id
-                WHERE a.advertiser_id = ?
-                  AND (e.rejected_wrong_region = 0 OR e.rejected_wrong_region IS NULL)
+                WHERE a.advertiser_id = {ph}
+                  AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)
             '''
 
             if active_only:
-                query += ' AND a.is_active = 1'
-
+                query += f' AND a.is_active = {true_val}'
             cursor.execute(query, (advertiser_id,))
             rows = cursor.fetchall()
 
@@ -373,24 +484,34 @@ class AdDatabase:
                 ...
             ]
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            query = '''
+            ph = self._param_placeholder()
+            false_val = 'FALSE' if self.use_postgres else '0'
+            true_val = 'TRUE' if self.use_postgres else '1'
+
+            # Days active calculation differs between SQLite and Postgres
+            if self.use_postgres:
+                days_calc = "CAST(EXTRACT(DAY FROM (CURRENT_TIMESTAMP - MIN(a.first_seen_date))) AS INTEGER)"
+            else:
+                days_calc = "CAST(julianday('now') - julianday(MIN(a.first_seen_date)) AS INTEGER)"
+
+            query = f'''
                 SELECT
                     a.advertiser_id,
                     e.product_category,
                     COUNT(DISTINCT a.id) as ad_count,
                     COUNT(DISTINCT a.image_url) as unique_creatives,
-                    CAST(julianday('now') - julianday(MIN(a.first_seen_date)) AS INTEGER) as days_active
+                    {days_calc} as days_active
                 FROM ads a
                 JOIN ad_enrichment e ON a.id = e.ad_id
-                WHERE a.is_active = 1
-                  AND (e.rejected_wrong_region = 0 OR e.rejected_wrong_region IS NULL)
+                WHERE a.is_active = {true_val}
+                  AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)
             '''
 
             if advertiser_id:
-                query += ' AND a.advertiser_id = ?'
+                query += f' AND a.advertiser_id = {ph}'
                 cursor.execute(query + ' GROUP BY a.advertiser_id, e.product_category', (advertiser_id,))
             else:
                 cursor.execute(query + ' GROUP BY a.advertiser_id, e.product_category')
@@ -433,8 +554,11 @@ class AdDatabase:
         elif time_range == "quarter":
             date_filter = "AND a.first_seen_date >= date('now', '-90 days')"
 
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
+
+            true_val = self._true_val()
+            false_val = self._false_val()
 
             query = f'''
                 SELECT
@@ -443,8 +567,8 @@ class AdDatabase:
                     COUNT(*) as count
                 FROM ads a
                 JOIN ad_enrichment e ON a.id = e.ad_id
-                WHERE a.is_active = 1
-                  AND (e.rejected_wrong_region = 0 OR e.rejected_wrong_region IS NULL)
+                WHERE a.is_active = {true_val}
+                  AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)
                   {date_filter}
                 GROUP BY a.advertiser_id, e.primary_theme
             '''
@@ -492,21 +616,37 @@ class AdDatabase:
                 ...
             ]
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            query = '''
-                SELECT
-                    DATE(first_seen_date) as ad_date,
-                    advertiser_id,
-                    COUNT(*) as count
-                FROM ads
-                WHERE first_seen_date >= date('now', ? || ' days')
-                GROUP BY DATE(first_seen_date), advertiser_id
-                ORDER BY ad_date DESC
-            '''
+            ph = self._param_placeholder()
 
-            cursor.execute(query, (-days,))
+            # Date arithmetic differs between SQLite and Postgres
+            if self.use_postgres:
+                date_filter = f"first_seen_date >= CURRENT_DATE - INTERVAL '{ph} days'"
+                query = f'''
+                    SELECT
+                        DATE(first_seen_date) as ad_date,
+                        advertiser_id,
+                        COUNT(*) as count
+                    FROM ads
+                    WHERE {date_filter}
+                    GROUP BY DATE(first_seen_date), advertiser_id
+                    ORDER BY ad_date DESC
+                '''
+                cursor.execute(query.replace(ph, '%s'), (days,))
+            else:
+                query = f'''
+                    SELECT
+                        DATE(first_seen_date) as ad_date,
+                        advertiser_id,
+                        COUNT(*) as count
+                    FROM ads
+                    WHERE first_seen_date >= date('now', {ph} || ' days')
+                    GROUP BY DATE(first_seen_date), advertiser_id
+                    ORDER BY ad_date DESC
+                '''
+                cursor.execute(query, (-days,))
             rows = cursor.fetchall()
 
             # Group by date
@@ -544,19 +684,22 @@ class AdDatabase:
                 ...
             ]
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            query = '''
+            true_val = self._true_val()
+            false_val = self._false_val()
+
+            query = f'''
                 SELECT
                     e.audience_segment,
                     a.advertiser_id,
                     COUNT(*) as ad_count
                 FROM ads a
                 JOIN ad_enrichment e ON a.id = e.ad_id
-                WHERE a.is_active = 1
+                WHERE a.is_active = {true_val}
                   AND e.audience_segment IS NOT NULL
-                  AND (e.rejected_wrong_region = 0 OR e.rejected_wrong_region IS NULL)
+                  AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)
                 GROUP BY e.audience_segment, a.advertiser_id
                 ORDER BY ad_count DESC
             '''
@@ -607,24 +750,42 @@ class AdDatabase:
         Returns:
             List of daily promo stats with breakdown by offer type
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            query = '''
-                SELECT
-                    DATE(a.first_seen_date) as promo_date,
-                    e.offer_type,
-                    COUNT(*) as count
-                FROM ads a
-                JOIN ad_enrichment e ON a.id = e.ad_id
-                WHERE a.first_seen_date >= date('now', ? || ' days')
-                  AND e.offer_type IS NOT NULL
-                  AND e.offer_type != 'none'
-                GROUP BY DATE(a.first_seen_date), e.offer_type
-                ORDER BY promo_date DESC
-            '''
+            ph = self._param_placeholder()
 
-            cursor.execute(query, (-days,))
+            # Date arithmetic differs between SQLite and Postgres
+            if self.use_postgres:
+                query = f'''
+                    SELECT
+                        DATE(a.first_seen_date) as promo_date,
+                        e.offer_type,
+                        COUNT(*) as count
+                    FROM ads a
+                    JOIN ad_enrichment e ON a.id = e.ad_id
+                    WHERE a.first_seen_date >= CURRENT_DATE - INTERVAL '{days} days'
+                      AND e.offer_type IS NOT NULL
+                      AND e.offer_type != 'none'
+                    GROUP BY DATE(a.first_seen_date), e.offer_type
+                    ORDER BY promo_date DESC
+                '''
+                cursor.execute(query)
+            else:
+                query = f'''
+                    SELECT
+                        DATE(a.first_seen_date) as promo_date,
+                        e.offer_type,
+                        COUNT(*) as count
+                    FROM ads a
+                    JOIN ad_enrichment e ON a.id = e.ad_id
+                    WHERE a.first_seen_date >= date('now', {ph} || ' days')
+                      AND e.offer_type IS NOT NULL
+                      AND e.offer_type != 'none'
+                    GROUP BY DATE(a.first_seen_date), e.offer_type
+                    ORDER BY promo_date DESC
+                '''
+                cursor.execute(query, (-days,))
             rows = cursor.fetchall()
 
             # Group by date
@@ -667,10 +828,13 @@ class AdDatabase:
                 ...
             ]
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            query = '''
+            true_val = self._true_val()
+            false_val = self._false_val()
+
+            query = f'''
                 SELECT
                     e.offer_type,
                     e.offer_details,
@@ -678,11 +842,11 @@ class AdDatabase:
                     COUNT(*) as ad_count
                 FROM ads a
                 JOIN ad_enrichment e ON a.id = e.ad_id
-                WHERE a.is_active = 1
+                WHERE a.is_active = {true_val}
                   AND e.offer_type IS NOT NULL
                   AND e.offer_type != 'none'
                   AND e.offer_type != ''
-                  AND (e.rejected_wrong_region = 0 OR e.rejected_wrong_region IS NULL)
+                  AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)
                 GROUP BY e.offer_type, a.advertiser_id
                 ORDER BY ad_count DESC
             '''
@@ -755,10 +919,13 @@ class AdDatabase:
                 ...
             ]
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            query = '''
+            true_val = self._true_val()
+            false_val = self._false_val()
+
+            query = f'''
                 SELECT
                     e.product_name,
                     e.product_category,
@@ -766,12 +933,12 @@ class AdDatabase:
                     COUNT(*) as ad_count
                 FROM ads a
                 JOIN ad_enrichment e ON a.id = e.ad_id
-                WHERE a.is_active = 1
+                WHERE a.is_active = {true_val}
                   AND e.product_name IS NOT NULL
                   AND e.product_name != ''
                   AND e.product_name != 'Unknown'
                   AND e.product_category = 'Specific Restaurant/Brand Promo'
-                  AND (e.rejected_wrong_region = 0 OR e.rejected_wrong_region IS NULL)
+                  AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)
                 GROUP BY e.product_name, a.advertiser_id
                 ORDER BY ad_count DESC
                 LIMIT 20
@@ -820,21 +987,27 @@ class AdDatabase:
                 ...
             ]
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            query = '''
+            true_val = self._true_val()
+            false_val = self._false_val()
+            
+            # GROUP_CONCAT vs STRING_AGG
+            concat_func = "STRING_AGG(DISTINCT e.food_category, ',')" if self.use_postgres else "GROUP_CONCAT(DISTINCT e.food_category)"
+
+            query = f'''
                 SELECT
                     e.brand,
                     a.advertiser_id,
                     COUNT(*) as ad_count,
-                    GROUP_CONCAT(DISTINCT e.food_category) as food_categories
+                    {concat_func} as food_categories
                 FROM ads a
                 JOIN ad_enrichment e ON a.id = e.ad_id
-                WHERE a.is_active = 1
+                WHERE a.is_active = {true_val}
                   AND e.brand IS NOT NULL
                   AND e.brand != ''
-                  AND (e.rejected_wrong_region = 0 OR e.rejected_wrong_region IS NULL)
+                  AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)
                 GROUP BY e.brand, a.advertiser_id
                 ORDER BY ad_count DESC
             '''
@@ -902,21 +1075,27 @@ class AdDatabase:
                 ...
             ]
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            query = '''
+            true_val = self._true_val()
+            false_val = self._false_val()
+
+            # GROUP_CONCAT vs STRING_AGG
+            concat_func = "STRING_AGG(DISTINCT e.brand, ',')" if self.use_postgres else "GROUP_CONCAT(DISTINCT e.brand)"
+
+            query = f'''
                 SELECT
                     e.food_category,
                     a.advertiser_id,
                     COUNT(*) as ad_count,
-                    GROUP_CONCAT(DISTINCT e.brand) as brands
+                    {concat_func} as brands
                 FROM ads a
                 JOIN ad_enrichment e ON a.id = e.ad_id
-                WHERE a.is_active = 1
+                WHERE a.is_active = {true_val}
                   AND e.food_category IS NOT NULL
                   AND e.food_category != ''
-                  AND (e.rejected_wrong_region = 0 OR e.rejected_wrong_region IS NULL)
+                  AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)
                 GROUP BY e.food_category, a.advertiser_id
                 ORDER BY ad_count DESC
             '''
@@ -984,21 +1163,27 @@ class AdDatabase:
                 ...
             ]
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            query = '''
+            true_val = self._true_val()
+            false_val = self._false_val()
+
+            # GROUP_CONCAT vs STRING_AGG
+            concat_func = "STRING_AGG(DISTINCT e.brand, ',')" if self.use_postgres else "GROUP_CONCAT(DISTINCT e.brand)"
+
+            query = f'''
                 SELECT
                     e.product_category,
                     a.advertiser_id,
                     COUNT(*) as ad_count,
-                    GROUP_CONCAT(DISTINCT e.brand) as brands
+                    {concat_func} as brands
                 FROM ads a
                 JOIN ad_enrichment e ON a.id = e.ad_id
-                WHERE a.is_active = 1
+                WHERE a.is_active = {true_val}
                   AND e.product_category IS NOT NULL
                   AND e.product_category != ''
-                  AND (e.rejected_wrong_region = 0 OR e.rejected_wrong_region IS NULL)
+                  AND (e.rejected_wrong_region = {false_val} OR e.rejected_wrong_region IS NULL)
                 GROUP BY e.product_category, a.advertiser_id
                 ORDER BY ad_count DESC
             '''
@@ -1062,14 +1247,18 @@ class AdDatabase:
             advertiser_id: Competitor's advertiser ID
             ad_signatures: List of ad signatures (ad_text||image_url) that are ACTIVE
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
 
+            ph = self._param_placeholder()
+            true_val = self._true_val()
+            false_val = self._false_val()
+
             # Get all ads for this advertiser
-            cursor.execute('''
+            cursor.execute(f'''
                 SELECT id, ad_text, image_url
                 FROM ads
-                WHERE advertiser_id = ? AND is_active = 1
+                WHERE advertiser_id = {ph} AND is_active = {true_val}
             ''', (advertiser_id,))
 
             rows = cursor.fetchall()
@@ -1081,10 +1270,10 @@ class AdDatabase:
 
                 # If this ad is not in current scrape, mark inactive
                 if signature not in ad_signatures:
-                    cursor.execute('''
+                    cursor.execute(f'''
                         UPDATE ads
-                        SET is_active = 0, last_seen_date = CURRENT_TIMESTAMP
-                        WHERE id = ?
+                        SET is_active = {false_val}, last_seen_date = CURRENT_TIMESTAMP
+                        WHERE id = {ph}
                     ''', (ad_id,))
                     inactive_count += 1
 
@@ -1101,13 +1290,15 @@ class AdDatabase:
             advertiser_id: Competitor's advertiser ID
             stats: Dict with keys: ads_found, ads_new, ads_retired
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            cursor.execute('''
+            ph = self._param_placeholder()
+
+            cursor.execute(f'''
                 INSERT INTO scrape_runs
                 (advertiser_id, ads_found, ads_new, ads_retired, enrichment_enabled)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph})
             ''', (
                 advertiser_id,
                 stats.get('ads_total', 0),
@@ -1120,13 +1311,15 @@ class AdDatabase:
 
     def get_stats(self) -> Dict:
         """Get overall database statistics"""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
+
+            true_val = self._true_val()
 
             cursor.execute('SELECT COUNT(*) FROM ads')
             total_ads = cursor.fetchone()[0]
 
-            cursor.execute('SELECT COUNT(*) FROM ads WHERE is_active = 1')
+            cursor.execute(f'SELECT COUNT(*) FROM ads WHERE is_active = {true_val}')
             active_ads = cursor.fetchone()[0]
 
             cursor.execute('SELECT COUNT(DISTINCT advertiser_id) FROM ads')
@@ -1158,14 +1351,16 @@ class AdDatabase:
         Returns:
             Dict with product info or None if not found
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
+            ph = self._param_placeholder()
+
             # Try exact match first
-            cursor.execute('''
+            cursor.execute(f'''
                 SELECT * FROM product_knowledge
-                WHERE LOWER(product_name) = LOWER(?)
+                WHERE LOWER(product_name) = LOWER({ph})
             ''', (product_name,))
 
             row = cursor.fetchone()
@@ -1178,9 +1373,9 @@ class AdDatabase:
                 return product
 
             # Try fuzzy match (contains)
-            cursor.execute('''
+            cursor.execute(f'''
                 SELECT * FROM product_knowledge
-                WHERE LOWER(product_name) LIKE LOWER(?)
+                WHERE LOWER(product_name) LIKE LOWER({ph})
                 ORDER BY LENGTH(product_name) ASC
                 LIMIT 1
             ''', (f'%{product_name}%',))
@@ -1211,7 +1406,7 @@ class AdDatabase:
                 - confidence (optional float)
                 - search_source (optional): 'web_search', 'manual', etc.
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
 
             # Convert metadata dict to JSON if present
@@ -1219,22 +1414,53 @@ class AdDatabase:
             if 'metadata' in product_data and product_data['metadata']:
                 metadata_json = json.dumps(product_data['metadata'])
 
-            cursor.execute('''
-                INSERT OR REPLACE INTO product_knowledge
-                (product_name, product_type, category, is_restaurant, is_unknown_category,
-                 is_subscription, metadata, confidence, search_source, verified_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ''', (
-                product_data['product_name'],
-                product_data['product_type'],
-                product_data.get('category'),
-                product_data.get('is_restaurant', False),
-                product_data.get('is_unknown_category', False),
-                product_data.get('is_subscription', False),
-                metadata_json,
-                product_data.get('confidence', 0.0),
-                product_data.get('search_source', 'unknown')
-            ))
+            ph = self._param_placeholder()
+
+            # Use ON CONFLICT for Postgres, INSERT OR REPLACE for SQLite
+            if self.use_postgres:
+                cursor.execute(f'''
+                    INSERT INTO product_knowledge
+                    (product_name, product_type, category, is_restaurant, is_unknown_category,
+                     is_subscription, metadata, confidence, search_source, verified_date)
+                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, CURRENT_TIMESTAMP)
+                    ON CONFLICT (product_name) DO UPDATE SET
+                        product_type = EXCLUDED.product_type,
+                        category = EXCLUDED.category,
+                        is_restaurant = EXCLUDED.is_restaurant,
+                        is_unknown_category = EXCLUDED.is_unknown_category,
+                        is_subscription = EXCLUDED.is_subscription,
+                        metadata = EXCLUDED.metadata,
+                        confidence = EXCLUDED.confidence,
+                        search_source = EXCLUDED.search_source,
+                        verified_date = CURRENT_TIMESTAMP
+                ''', (
+                    product_data['product_name'],
+                    product_data['product_type'],
+                    product_data.get('category'),
+                    product_data.get('is_restaurant', False),
+                    product_data.get('is_unknown_category', False),
+                    product_data.get('is_subscription', False),
+                    metadata_json,
+                    product_data.get('confidence', 0.0),
+                    product_data.get('search_source', 'unknown')
+                ))
+            else:
+                cursor.execute(f'''
+                    INSERT OR REPLACE INTO product_knowledge
+                    (product_name, product_type, category, is_restaurant, is_unknown_category,
+                     is_subscription, metadata, confidence, search_source, verified_date)
+                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, CURRENT_TIMESTAMP)
+                ''', (
+                    product_data['product_name'],
+                    product_data['product_type'],
+                    product_data.get('category'),
+                    product_data.get('is_restaurant', False),
+                    product_data.get('is_unknown_category', False),
+                    product_data.get('is_subscription', False),
+                    metadata_json,
+                    product_data.get('confidence', 0.0),
+                    product_data.get('search_source', 'unknown')
+                ))
 
             conn.commit()
 
@@ -1242,7 +1468,7 @@ class AdDatabase:
 
     def get_product_knowledge_stats(self) -> Dict:
         """Get statistics about the product knowledge base"""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             cursor = conn.cursor()
 
             cursor.execute('SELECT COUNT(*) FROM product_knowledge')
